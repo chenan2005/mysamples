@@ -1,0 +1,115 @@
+#!/bin/bash
+
+show_help(){
+	echo "$0 [-f filter] [-r] [-p] <-s merge_source>"
+	echo "-f : file name filter, use grep to filter filename"
+	echo "-r : ignore diff process, file from merge source will replace current file. otherwise will exec diff tool to merge"
+	echo "-p : enable manual select, will promt per file. if this option enabled, -r will be ignored"
+	echo "-s ：specify merge source, can be branch name or tag name or hash code"
+}
+
+merge_source=""
+file_filter=""
+
+while getopts "f:rps:" arg
+do
+	case $arg in
+		f)
+			echo "info: filter: $OPTARG"
+			file_filter=$OPTARG
+			;;
+		r)
+			echo "warning: option -r enabled, will replace current branch files"
+			replace_file="1"
+			;;
+		p)
+			echo "info: promt enabled, option -r will be ignore"
+			promt_enabled="1"
+			;;
+		s)
+			echo "info: merge source: $OPTARG"
+			merge_source=$OPTARG
+			;;
+		?)
+			echo "fatal: unknown argument"
+			show_help
+			exit 0
+			;;
+	esac
+done
+
+if [[ $merge_source == "" ]]
+then
+	show_help
+        exit 0
+fi
+
+current_diff_stat=$(git diff --numstat HEAD | cut -f 3-)
+if [[ $current_diff_stat != "" ]]
+then
+	echo "fatal: current file does not match HEAD"
+	echo "       $current_diff_stat"
+	exit 0
+fi
+
+if [[ $file_filter == "" ]]
+then
+	filelist=$(git diff --numstat $merge_source | cut -f 3-)
+else
+	filelist=$(git diff --numstat $merge_source | cut -f 3- | grep $file_filter)
+fi
+
+processed_files=""
+
+for file_name in $filelist
+do
+	echo "$file_name :"
+	if [[ $promt_enabled == "1" ]] 
+	then
+		printf "select $file_name process ? (r(replace)/m(merge)/anyother(do not process this file)) " && read select_process
+	elif [[ $replace_file == "1" ]] 
+	then
+		select_process="r"
+	else
+		select_process="m"
+	fi
+
+	if [[ $select_process == "r" ]]	
+	then	
+		echo "info : checkout $file_name from $merge_source..."
+		git checkout $merge_source $file_name
+	elif [[ $select_process == "m" ]] 
+	then
+		if [[ -e $file_name ]] 
+		then
+			git difftool $merge_source $file_name -y
+		else
+			echo "info : checkout $file_name from $merge_source..."
+			git checkout $merge_source $file_name
+		fi
+	else
+		continue
+	fi
+
+	processed_files="$processed_files $file_name"
+done
+
+if [[ $processed_files == "" ]]
+then
+	echo "info : nothing changed."
+	exit 0
+fi
+
+printf "processed files:$processed_files \n continue ? (y/n) " && read confirm && [[ $confirm != "y" ]] && exit 0
+
+echo "info : add $processed_files to git..."
+git add $processed_files
+
+commit_comment="merge select files $processed_files from $merge_source"
+
+printf "auto comment: $commit_comment \ninput new comment (null for accept auto comment):" && read input_comment && [[ $input_comment != "" ]] && $commit_comment=$input_comment
+
+echo "info : commit changes..."
+git commit -m "$commit_comment"
+
+echo "info : done"
